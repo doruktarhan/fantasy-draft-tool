@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draft Board</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f6f7f9; --panel2: #ffffff; --line: #d9dde5; --line2: #eceef2;
+    --fg: #14171d; --muted: #6b7280; --accent: #2563eb; --star: #d99a00; --star-bg: #fff6d6;
+    --good: #15803d; --good2: #16a34a; --good-bg: #dcfce7; --good-bg2: #bbf7d0;
+    --bad: #dc2626; --bad-bg: #fee2e2; --warn: #d97706;
+    --target-bg: #d1fae5; --target-bg-hover: #a7f3d0; --hover-bg: #dbeafe; --zebra: #f3f4f6;
+    --row-h: 34px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    font-size: 15.5px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); display: flex; flex-direction: column; overflow: hidden; }
+  button { font: inherit; color: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+
+  /* ---- top bar ---- */
+  #top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); flex: 0 0 auto; flex-wrap: wrap; }
+  #searchWrap { position: relative; }
+  #search { width: 320px; padding: 7px 11px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 7px; font-size: 16px; }
+  #suggest { position: absolute; top: 100%; left: 0; width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; margin-top: 3px; z-index: 20; display: none; max-height: 360px; overflow: auto; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+  #suggest.open { display: block; }
+  #suggest .s { display: flex; align-items: center; gap: 8px; padding: 7px 11px; cursor: pointer; }
+  #suggest .s.active { background: var(--hover-bg); }
+  #suggest .s .nm { font-weight: 600; }
+  #suggest .s .meta { color: var(--muted); font-size: 13px; }
+  #suggest .s .hint { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+  #suggest .s.gone .nm { color: var(--muted); text-decoration: line-through; }
+  #suggest .s.gone .hint { color: var(--bad); }
+  @keyframes rowflash { 0%, 35% { background: #fde047; } 100% { background: transparent; } }
+  #board tbody tr.flash td { animation: rowflash 1.5s ease-out forwards; box-shadow: inset 0 2px 0 var(--star), inset 0 -2px 0 var(--star); }
+  .chips { display: flex; gap: 4px; }
+  .chip { padding: 4px 12px; border-radius: 999px; background: var(--bg); }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .counts { color: var(--muted); display: flex; gap: 16px; }
+  .counts b { color: var(--fg); }
+  #top .spacer { flex: 1; }
+  .kbd { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; background: var(--bg); }
+
+  /* ---- layout ---- */
+  #main { display: flex; flex: 1 1 auto; min-height: 0; }
+  #boardWrap { flex: 1 1 auto; min-width: 0; overflow: auto; }
+  #side { flex: 0 0 505px; width: 505px; min-width: 0; overflow: hidden; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  body.cats #side { flex-basis: 600px; width: 600px; }
+  body.nocats .catsToggle { display: none; }
+  #board { min-width: 760px; }
+  body.cats #sl td.name { max-width: 130px; }
+  body.cats #sl td, body.cats #sl th { padding-left: 3px; padding-right: 3px; }
+  #side > section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  #side h2 { margin: 0 0 8px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  #side h2 .r { margin-left: auto; font-weight: normal; text-transform: none; letter-spacing: 0; }
+  #shortlistSec { flex: 1 1 auto; overflow: auto; min-height: 120px; }
+  #logSec { max-height: 32vh; overflow: auto; }
+
+  /* ---- board table ---- */
+  table { border-collapse: collapse; width: 100%; }
+  #board thead th { position: sticky; top: 0; background: var(--panel); z-index: 5; text-align: left; padding: 7px 8px; font-weight: 600; color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap; border-bottom: 2px solid var(--line); width: 1%; }
+  #board thead th.num { text-align: right; }
+  #board thead th.fill { width: auto; cursor: default; }
+  #board thead th:hover { color: var(--fg); }
+  #board thead th.sorted { color: var(--fg); }
+  #board thead th .arrow { display: inline-block; width: 12px; color: var(--accent); }
+  #board tbody td { padding: 0 8px; height: var(--row-h); border-bottom: 1px solid var(--line2); white-space: nowrap; width: 1%; }
+  #board tbody td.fill { width: auto; }
+  #board tbody tr:nth-child(even) td { background: var(--zebra); }
+  #board tbody tr.target td { background: var(--target-bg); }
+  #board tbody tr.target td.name { color: var(--good); }
+  #board tbody tr:hover td { background: var(--hover-bg) !important; box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent); }
+  #board tbody tr.target:hover td { background: var(--target-bg-hover) !important; }
+  #board tbody tr.starred td.name { color: #a16207; }
+  #board tbody tr.starred td.name::after { content: " ★"; color: var(--star); font-size: 12px; }
+  td.name { font-weight: 650; font-size: 16px; padding-right: 14px !important; }
+  td.act { padding-right: 4px !important; }
+  .ib { width: 28px; height: 26px; padding: 0; line-height: 24px; text-align: center; border-radius: 5px; font-size: 15px; }
+  .ib.star { color: #b0b6c3; }
+  .ib.star:hover { color: var(--star); border-color: var(--star); }
+  .ib.star.on { color: var(--star); border-color: var(--star); background: var(--star-bg); }
+  .ib.drop:hover { border-color: var(--bad); color: var(--bad); }
+  .pos { color: var(--muted); font-size: 13.5px; }
+  .team { color: var(--muted); font-size: 12.5px; font-weight: normal; }
+  .miss { color: var(--muted); opacity: .55; }
+  .miss::after { content: "—"; }
+  td.comp { font-weight: 650; }
+  .val { font-weight: 700; padding: 1px 6px; border-radius: 4px; display: inline-block; min-width: 38px; text-align: right; }
+  .val.pos { color: var(--good); background: var(--good-bg); }
+  .val.pos2 { color: #fff; background: var(--good2); }
+  .val.neg { color: var(--bad); background: var(--bad-bg); }
+  .val.zero { color: var(--muted); }
+  .rank { color: var(--muted); font-size: 12px; margin-left: 4px; font-weight: normal; }
+  #empty { padding: 30px; color: var(--muted); text-align: center; }
+
+  /* ---- weights ---- */
+  .w { display: grid; grid-template-columns: 70px 1fr 34px; align-items: center; gap: 8px; margin: 4px 0; }
+  .w label { color: var(--muted); }
+  .w input[type=range] { width: 100%; accent-color: var(--accent); }
+  .w .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  #weightsSec .row { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+  #weightsSec .row button { font-size: 13px; padding: 2px 9px; }
+
+  /* ---- shortlist ---- */
+  #sl { width: 100%; }
+  #sl th { text-align: right; color: var(--muted); font-weight: 600; padding: 4px 6px; font-size: 12px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+  #sl th:first-child, #sl th.l { text-align: left; }
+  #sl td { padding: 2px 6px; height: 30px; border-bottom: 1px solid var(--line2); white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+  #sl td.l { text-align: left; }
+  #sl td.name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; font-weight: 650; padding-right: 10px; }
+  #sl tr.target td { background: var(--target-bg); }
+  #sl tr.target td.name { color: var(--good); }
+  #sl tr:hover td { background: var(--hover-bg); }
+  #sl td.best { color: var(--good); font-weight: 700; }
+  #sl td.best .val { box-shadow: 0 0 0 2px var(--good2); }
+  #sl td.rowbest { text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  #sl td.worst-in-row { color: var(--muted); }
+  #sl .spread { color: var(--muted); font-size: 12px; }
+  #sl .spread.big { color: var(--warn); font-weight: 700; }
+  #sl td.cat { font-size: 11.5px; padding: 2px 2px !important; }
+  #sl th.cat { font-size: 10.5px; padding: 2px 2px !important; }
+  #sl td.cat.best { color: var(--good); }
+  #sl td.cat.worst { color: var(--bad); }
+  #slEmpty { color: var(--muted); padding: 8px 0; }
+  .catsToggle { display: flex; align-items: center; gap: 4px; color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0; cursor: pointer; }
+
+  /* ---- draft log ---- */
+  #log { list-style: none; margin: 0; padding: 0; }
+  #log li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line2); }
+  #log li .n { color: var(--muted); width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+  #log li .who { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  #log li button { font-size: 12px; padding: 1px 7px; }
+  #logEmpty { color: var(--muted); }
+
+  #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--fg); color: #fff; border: 1px solid var(--fg); padding: 9px 16px; border-radius: 7px; box-shadow: 0 8px 24px rgba(0,0,0,.25); display: none; z-index: 50; }
+  #toast.show { display: flex; gap: 12px; align-items: center; }
+  #toast button { background: transparent; color: #fff; border-color: rgba(255,255,255,.5); }
+  #srcBadge { color: var(--muted); font-size: 12px; }
+  #srcBadge.mock { color: var(--warn); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  <div id="searchWrap">
+    <input id="search" type="text" placeholder="Find player…  (Enter = jump to row)" autocomplete="off" spellcheck="false">
+    <div id="suggest" role="listbox"></div>
+  </div>
+  <div class="chips" id="posChips">
+    <button class="chip" data-pos="PG">PG</button>
+    <button class="chip" data-pos="SG">SG</button>
+    <button class="chip" data-pos="SF">SF</button>
+    <button class="chip" data-pos="PF">PF</button>
+    <button class="chip" data-pos="C">C</button>
+  </div>
+  <div class="counts">
+    <span>Left <b id="cntLeft">0</b></span>
+    <span>Drafted <b id="cntDrafted">0</b></span>
+    <span>Starred <b id="cntStar">0</b></span>
+  </div>
+  <div class="spacer"></div>
+  <span id="srcBadge"></span>
+  <span class="kbd" title="Press / to focus search">/</span>
+  <button id="resetBtn" title="Clear drafted, starred and weights">Reset</button>
+</div>
+
+<div id="main">
+  <div id="boardWrap">
+    <table id="board">
+      <thead><tr id="boardHead"></tr></thead>
+      <tbody id="boardBody"></tbody>
+    </table>
+    <div id="empty" hidden>No players match.</div>
+  </div>
+
+  <aside id="side">
+    <section id="weightsSec">
+      <h2>Composite weights <span class="r" id="wSum"></span></h2>
+      <div class="w"><label for="wY">Yahoo</label><input id="wY" type="range" min="0" max="10" step="0.5"><span class="v" id="wYv"></span></div>
+      <div class="w"><label for="wA">ADP</label><input id="wA" type="range" min="0" max="10" step="0.5"><span class="v" id="wAv"></span></div>
+      <div class="w"><label for="wH">Hashtag</label><input id="wH" type="range" min="0" max="10" step="0.5"><span class="v" id="wHv"></span></div>
+      <div class="row">
+        <button id="wEqual">Equal</button>
+        <span class="hint">Composite = weighted avg of the ranks each player has. HT edge = market (avg Yahoo + ADP rank) − Hashtag rank; + = Hashtag likes them more than the market.</span>
+      </div>
+    </section>
+
+    <section id="shortlistSec">
+      <h2>Shortlist <span class="r"><label class="catsToggle"><input type="checkbox" id="showCats"> 9-cat</label></span></h2>
+      <div id="slEmpty">Star players (★) to compare them here.</div>
+      <table id="sl" hidden><thead id="slHead"></thead><tbody id="slBody"></tbody></table>
+    </section>
+
+    <section id="logSec">
+      <h2>Drafted <span class="r"><button id="undoLast" title="Undo the most recent pick (Ctrl/Cmd+Z)">Undo last</button></span></h2>
+      <div id="logEmpty">Nothing drafted yet.</div>
+      <ul id="log"></ul>
+    </section>
+  </aside>
+</div>
+
+<div id="toast"></div>
+
+<script src="data/players.js"></script>
+<script src="data/players.mock.js"></script>
+<script src="data/targets.js"></script>
+<script>
+(function () {
+  "use strict";
+  var PLAYERS = Array.isArray(window.PLAYERS) ? window.PLAYERS : [];
+  var byId = {};
+  PLAYERS.forEach(function (p) { byId[p.id] = p; });
+
+  // ---------- persistence ----------
+  var KEY = "fdt:v1";
+  var DEFAULT_W = { y: 5, a: 5, h: 5 };
+  var state = { drafted: [], starred: [], w: { y: 5, a: 5, h: 5 }, sort: { key: "comp", dir: 1 }, showCats: false };
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      var s = JSON.parse(raw);
+      if (Array.isArray(s.drafted)) state.drafted = s.drafted.filter(function (id) { return byId[id]; });
+      if (Array.isArray(s.starred)) state.starred = s.starred.filter(function (id) { return byId[id]; });
+      if (s.w && typeof s.w === "object") state.w = { y: num(s.w.y, 5), a: num(s.w.a, 5), h: num(s.w.h, 5) };
+      if (s.sort && s.sort.key) state.sort = s.sort;
+      if (typeof s.showCats === "boolean") state.showCats = s.showCats;
+    } catch (e) { /* ignore */ }
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  }
+  function num(v, d) { v = Number(v); return isFinite(v) ? v : d; }
+
+  // ---------- composite ----------
+  var comp = {}; // id -> { score, rank, missing:[...], n }
+  function recompute() {
+    var w = state.w;
+    var sumW = w.y + w.a + w.h;
+    var list = [];
+    PLAYERS.forEach(function (p) {
+      var num = 0, den = 0, missing = [];
+      if (p.yahooRank != null) { num += w.y * p.yahooRank; den += w.y; } else missing.push("Y");
+      if (p.adpRank != null) { num += w.a * p.adpRank; den += w.a; } else missing.push("A");
+      if (p.hashtagRank != null) { num += w.h * p.hashtagRank; den += w.h; } else missing.push("H");
+      var score = den > 0 ? num / den : null;
+      comp[p.id] = { score: score, rank: null, missing: missing, n: 3 - missing.length };
+      if (score != null) list.push(p.id);
+    });
+    // Composite rank is ordinal among ALL players (drafted included) so value cue is stable across the draft.
+    list.sort(function (a, b) { return comp[a].score - comp[b].score; });
+    list.forEach(function (id, i) { comp[id].rank = i + 1; });
+    if (sumW === 0) PLAYERS.forEach(function (p) { comp[p.id].score = null; comp[p.id].rank = null; });
+  }
+  // HT edge: how much better Hashtag rates a player than the market (avg of Yahoo rank and ADP rank).
+  // Positive = Hashtag likes them more than people draft them. Null without a Hashtag rank.
+  function marketOf(p) {
+    if (p.yahooRank != null && p.adpRank != null) return (p.yahooRank + p.adpRank) / 2;
+    if (p.yahooRank != null) return p.yahooRank;
+    if (p.adpRank != null) return p.adpRank;
+    return null;
+  }
+  function valueOf(p) {
+    var m = marketOf(p);
+    if (m == null || p.hashtagRank == null) return null;
+    return m - p.hashtagRank;
+  }
+  // Colour class scaled by rank depth: +10 at pick 120 matters, +10 at pick 5 is noise.
+  function edgeClass(p) {
+    var v = valueOf(p), m = marketOf(p);
+    if (v == null || !m) return "zero";
+    if (Math.abs(v) < 3) return "zero"; // small absolute edges are noise, whatever the percentage
+    var pct = v / m;
+    if (pct >= 0.15) return "pos2";
+    if (pct >= 0.08) return "pos";
+    if (pct <= -0.15) return "neg";
+    return "zero";
+  }
+  function edgeTitle(p) {
+    var v = valueOf(p), m = marketOf(p);
+    if (v == null) return "No Hashtag rank";
+    return "market " + fmtNum(m) + " (avg of Yahoo " + (p.yahooRank == null ? "—" : p.yahooRank) + " and ADP #" + (p.adpRank == null ? "—" : p.adpRank) + ") − HT " + p.hashtagRank + " = " + fmtSigned(v) + " (" + Math.round(v / m * 100) + "%)";
+  }
+  function fmtNum(v) { return Number.isInteger(v) ? String(v) : v.toFixed(1); }
+  function fmtSigned(v) { return (v > 0 ? "+" : "") + fmtNum(v); }
+
+  // ---------- targets ----------
+  function normName(s) {
+    return String(s).normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  var targetSet = {};
+  (Array.isArray(window.TARGETS) ? window.TARGETS : []).forEach(function (n) { targetSet[normName(n)] = true; });
+  var isTarget = {};
+  PLAYERS.forEach(function (p) { isTarget[p.id] = !!targetSet[normName(p.name)]; });
+
+  // ---------- columns ----------
+  var COLS = [
+    { key: "act", label: "", sortable: false },
+    { key: "name", label: "Player", get: function (p) { return p.name; }, str: true },
+    { key: "pos", label: "Pos", get: function (p) { return p.pos || ""; }, str: true },
+    { key: "yahoo", label: "Yahoo", num: true, get: function (p) { return p.yahooRank; } },
+    { key: "adp", label: "ADP", num: true, get: function (p) { return p.adp7; } },
+    { key: "ht", label: "HT", num: true, get: function (p) { return p.hashtagRank; }, title: "Hashtag Basketball 9-cat rank" },
+    { key: "comp", label: "Comp", num: true, get: function (p) { return comp[p.id].score; }, title: "Composite (weighted avg rank). Lower is better." },
+    { key: "val", label: "HT edge", num: true, desc: true, get: function (p) { return valueOf(p); }, title: "HT edge = market − Hashtag rank, where market = avg of Yahoo rank and ADP rank (or whichever exists). Positive = Hashtag rates the player better than the market drafts them. Colour is relative to rank depth (edge ÷ market): light green ≥ +8%, strong green ≥ +15%, red ≤ −15%." },
+    { key: "fill", label: "", sortable: false },
+  ];
+  var colByKey = {};
+  COLS.forEach(function (c) { colByKey[c.key] = c; });
+
+  // ---------- derived ----------
+  var draftedSet = {}, starredSet = {};
+  function rebuildSets() {
+    draftedSet = {}; starredSet = {};
+    state.drafted.forEach(function (id) { draftedSet[id] = true; });
+    state.starred.forEach(function (id) { starredSet[id] = true; });
+  }
+  var posFilter = {}; // pos -> true
+  function matchesPosFilter(p) {
+    var keys = Object.keys(posFilter);
+    if (!keys.length) return true;
+    var pp = (p.pos || "").split(/[,/ ]+/);
+    return keys.some(function (k) { return pp.indexOf(k) >= 0; });
+  }
+  function clearPosFilter() {
+    posFilter = {};
+    document.querySelectorAll("#posChips .chip.on").forEach(function (b) { b.classList.remove("on"); });
+    renderBoard();
+  }
+  function available() {
+    return PLAYERS.filter(function (p) { return !draftedSet[p.id] && matchesPosFilter(p); });
+  }
+  function sorted(ps) {
+    var col = colByKey[state.sort.key] || colByKey.comp;
+    var dir = state.sort.dir;
+    var arr = ps.slice();
+    arr.sort(function (a, b) {
+      var va = col.get(a), vb = col.get(b);
+      var an = va == null, bn = vb == null;
+      if (an && bn) return tiebreak(a, b);
+      if (an) return 1; // nulls always last
+      if (bn) return -1;
+      var r = col.str ? String(va).localeCompare(String(vb)) : (va - vb);
+      if (r === 0) return tiebreak(a, b);
+      return r * dir;
+    });
+    return arr;
+  }
+  function tiebreak(a, b) {
+    var ca = comp[a.id].score, cb = comp[b.id].score;
+    if (ca == null && cb == null) return a.name.localeCompare(b.name);
+    if (ca == null) return 1;
+    if (cb == null) return -1;
+    return ca - cb;
+  }
+
+  // ---------- render: board ----------
+  var $ = function (id) { return document.getElementById(id); };
+  var boardHead = $("boardHead"), boardBody = $("boardBody");
+
+  function renderHead() {
+    boardHead.innerHTML = "";
+    COLS.forEach(function (c) {
+      var th = document.createElement("th");
+      th.textContent = c.label;
+      if (c.title) th.title = c.title;
+      if (c.num) th.className = "num";
+      if (c.key === "fill") th.className = "fill";
+      if (c.sortable !== false) {
+        th.dataset.key = c.key;
+        if (state.sort.key === c.key) {
+          th.classList.add("sorted");
+          var a = document.createElement("span");
+          a.className = "arrow";
+          a.textContent = state.sort.dir === 1 ? "▲" : "▼";
+          th.appendChild(a);
+        }
+        th.addEventListener("click", function () {
+          if (state.sort.key === c.key) state.sort.dir = -state.sort.dir;
+          else state.sort = { key: c.key, dir: c.desc ? -1 : 1 };
+          save(); renderAll();
+        });
+      }
+      boardHead.appendChild(th);
+    });
+  }
+
+  // "Name (TEAM)" with the team in small muted text.
+  function nameWithTeam(p) {
+    var frag = document.createDocumentFragment();
+    frag.appendChild(document.createTextNode(p.name));
+    if (p.team) { var t = document.createElement("span"); t.className = "team"; t.textContent = " (" + p.team + ")"; frag.appendChild(t); }
+    return frag;
+  }
+  function fmt(v, digits) {
+    if (v == null) return null;
+    return digits ? v.toFixed(digits) : String(v);
+  }
+  function cellNum(td, v, digits) {
+    if (v == null) { td.innerHTML = '<span class="miss" title="not ranked by this source"></span>'; }
+    else td.textContent = fmt(v, digits);
+  }
+
+  function renderBoard() {
+    var ps = sorted(available());
+    var frag = document.createDocumentFragment();
+    ps.forEach(function (p) {
+      var c = comp[p.id];
+      var tr = document.createElement("tr");
+      tr.dataset.id = p.id;
+      if (starredSet[p.id]) tr.className = "starred";
+
+      var act = document.createElement("td"); act.className = "act";
+      var sb = document.createElement("button"); sb.className = "ib star" + (starredSet[p.id] ? " on" : ""); sb.textContent = "★"; sb.title = "Star / shortlist"; sb.dataset.act = "star";
+      var db = document.createElement("button"); db.className = "ib drop"; db.textContent = "−"; db.title = "Mark drafted"; db.dataset.act = "draft";
+      act.appendChild(sb); act.appendChild(document.createTextNode(" ")); act.appendChild(db);
+      tr.appendChild(act);
+
+      var name = document.createElement("td"); name.className = "name"; name.appendChild(nameWithTeam(p)); tr.appendChild(name);
+      var pos = document.createElement("td"); pos.className = "pos"; pos.textContent = p.pos || ""; tr.appendChild(pos);
+
+      var y = document.createElement("td"); y.className = "num"; cellNum(y, p.yahooRank); tr.appendChild(y);
+      var a = document.createElement("td"); a.className = "num"; cellNum(a, p.adp7, 1);
+      if (p.adp7 != null && p.adpRank != null) { var rs = document.createElement("span"); rs.className = "rank"; rs.textContent = "#" + p.adpRank; a.appendChild(rs); }
+      tr.appendChild(a);
+      var h = document.createElement("td"); h.className = "num"; cellNum(h, p.hashtagRank); tr.appendChild(h);
+
+      var ct = document.createElement("td"); ct.className = "num comp";
+      if (c.score == null) ct.innerHTML = '<span class="miss"></span>';
+      else {
+        ct.textContent = c.score.toFixed(1);
+        var rk = document.createElement("span"); rk.className = "rank"; rk.textContent = "#" + c.rank; ct.appendChild(rk);
+        if (c.missing.length) { var m = document.createElement("span"); m.className = "rank miss"; m.title = "missing: " + c.missing.join(", ") + " (averaged over " + c.n + " source" + (c.n === 1 ? "" : "s") + ")"; m.textContent = " " + c.n + "/3"; ct.appendChild(m); }
+      }
+      tr.appendChild(ct);
+
+      var vt = document.createElement("td"); vt.className = "num";
+      var v = valueOf(p);
+      vt.title = edgeTitle(p);
+      if (v == null) vt.innerHTML = '<span class="miss"></span>';
+      else { var vs = document.createElement("span"); vs.className = "val " + edgeClass(p); vs.textContent = fmtSigned(v); vt.appendChild(vs); }
+      tr.appendChild(vt);
+      tr.appendChild(document.createElement("td")).className = "fill";
+      if (isTarget[p.id]) tr.classList.add("target");
+
+      frag.appendChild(tr);
+    });
+    boardBody.innerHTML = "";
+    boardBody.appendChild(frag);
+    $("empty").hidden = ps.length > 0;
+  }
+
+  boardBody.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-act]");
+    if (!b) return;
+    var id = b.closest("tr").dataset.id;
+    if (b.dataset.act === "star") toggleStar(id);
+    else if (b.dataset.act === "draft") draft(id);
+  });
+
+  // ---------- render: shortlist ----------
+  var CATS = ["fg", "ft", "tpm", "pts", "reb", "ast", "stl", "blk", "to"];
+  var CAT_LABEL = { fg: "FG%", ft: "FT%", tpm: "3PM", pts: "PTS", reb: "REB", ast: "AST", stl: "STL", blk: "BLK", to: "TO" };
+
+  function renderShortlist() {
+    var ids = state.starred.filter(function (id) { return !draftedSet[id]; });
+    $("slEmpty").hidden = ids.length > 0;
+    $("sl").hidden = ids.length === 0;
+    $("cntStar").textContent = ids.length;
+    document.body.classList.toggle("cats", state.showCats && ids.length > 0);
+    if (!ids.length) return;
+
+    var ps = ids.map(function (id) { return byId[id]; });
+    ps.sort(function (a, b) { return tiebreak(a, b); });
+
+    var head = $("slHead"), body = $("slBody");
+    var showCats = state.showCats;
+    var h = '<tr><th class="l"></th><th class="l">Player</th><th>Y</th><th>ADP</th><th>HT</th><th title="Composite">Comp</th><th title="HT edge: market (avg of Yahoo + ADP rank) − Hashtag rank. Positive = Hashtag likes them more than the market.">Edge</th><th title="Best source rank − worst source rank">Δ</th>';
+    if (showCats) CATS.forEach(function (k) { h += '<th class="cat">' + CAT_LABEL[k] + "</th>"; });
+    h += "</tr>";
+    head.innerHTML = h;
+
+    // column bests (lower is better for ranks, higher for value)
+    function minOf(f) { var m = null; ps.forEach(function (p) { var v = f(p); if (v != null && (m == null || v < m)) m = v; }); return m; }
+    function maxOf(f) { var m = null; ps.forEach(function (p) { var v = f(p); if (v != null && (m == null || v > m)) m = v; }); return m; }
+    var bestY = minOf(function (p) { return p.yahooRank; });
+    var bestA = minOf(function (p) { return p.adpRank; });
+    var bestH = minOf(function (p) { return p.hashtagRank; });
+    var bestC = minOf(function (p) { return comp[p.id].score; });
+    var bestV = maxOf(valueOf);
+    var catBest = {}, catWorst = {};
+    if (showCats) CATS.forEach(function (k) {
+      var f = function (p) { return p.cats && p.cats[k] != null ? p.cats[k] : null; };
+      // TO: lower is better
+      catBest[k] = k === "to" ? minOf(f) : maxOf(f);
+      catWorst[k] = k === "to" ? maxOf(f) : minOf(f);
+    });
+
+    body.innerHTML = "";
+    ps.forEach(function (p) {
+      var c = comp[p.id];
+      var tr = document.createElement("tr"); tr.dataset.id = p.id;
+      var ranks = [p.yahooRank, p.adpRank, p.hashtagRank].filter(function (v) { return v != null; });
+      var rowMin = ranks.length ? Math.min.apply(null, ranks) : null;
+      var rowMax = ranks.length ? Math.max.apply(null, ranks) : null;
+
+      var td0 = document.createElement("td"); td0.className = "l";
+      td0.innerHTML = '<button class="ib star on" data-act="star" title="Unstar">★</button> <button class="ib drop" data-act="draft" title="Mark drafted">−</button>';
+      tr.appendChild(td0);
+      var tn = document.createElement("td"); tn.className = "l name"; tn.appendChild(nameWithTeam(p)); tn.title = p.name + " · " + p.pos + " · " + p.team; tr.appendChild(tn);
+
+      function rankCell(v, best, label) {
+        var td = document.createElement("td");
+        if (v == null) { td.innerHTML = '<span class="miss"></span>'; }
+        else {
+          td.textContent = v;
+          if (v === best) td.classList.add("best");
+          if (ranks.length > 1 && v === rowMin) td.classList.add("rowbest");
+          if (ranks.length > 1 && v === rowMax && rowMax !== rowMin) td.classList.add("worst-in-row");
+        }
+        if (label) td.title = label;
+        return td;
+      }
+      tr.appendChild(rankCell(p.yahooRank, bestY, "Yahoo rank"));
+      var ta = rankCell(p.adpRank, bestA, p.adp7 != null ? "ADP " + p.adp7.toFixed(1) : "ADP"); tr.appendChild(ta);
+      tr.appendChild(rankCell(p.hashtagRank, bestH, "Hashtag rank"));
+
+      var tc = document.createElement("td");
+      if (c.score == null) tc.innerHTML = '<span class="miss"></span>';
+      else { tc.textContent = c.score.toFixed(1); if (c.score === bestC) tc.classList.add("best"); if (c.missing.length) tc.title = "missing: " + c.missing.join(", "); }
+      tr.appendChild(tc);
+
+      var tv = document.createElement("td");
+      var v = valueOf(p);
+      tv.title = edgeTitle(p);
+      if (v == null) tv.innerHTML = '<span class="miss"></span>';
+      else { var es = document.createElement("span"); es.className = "val " + edgeClass(p); es.textContent = fmtSigned(v); tv.appendChild(es); if (v === bestV) tv.classList.add("best"); }
+      if (isTarget[p.id]) tr.classList.add("target");
+      tr.appendChild(tv);
+
+      var ts = document.createElement("td");
+      if (ranks.length > 1) { var sp = rowMax - rowMin; ts.innerHTML = '<span class="spread' + (sp >= 10 ? " big" : "") + '">' + sp + "</span>"; ts.title = "Disagreement between sources (best − worst rank)"; }
+      else ts.innerHTML = '<span class="miss"></span>';
+      tr.appendChild(ts);
+
+      if (showCats) CATS.forEach(function (k) {
+        var td = document.createElement("td"); td.className = "cat";
+        var cv = p.cats && p.cats[k] != null ? p.cats[k] : null;
+        if (cv == null) td.innerHTML = '<span class="miss"></span>';
+        else {
+          td.textContent = (k === "fg" || k === "ft") ? (cv * 100).toFixed(0) : cv.toFixed(1);
+          if (ps.length > 1 && cv === catBest[k]) td.classList.add("best");
+          else if (ps.length > 1 && cv === catWorst[k]) td.classList.add("worst");
+        }
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+  }
+  $("slBody").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-act]");
+    if (!b) return;
+    var id = b.closest("tr").dataset.id;
+    if (b.dataset.act === "star") toggleStar(id);
+    else if (b.dataset.act === "draft") draft(id);
+  });
+  $("showCats").addEventListener("change", function () { state.showCats = this.checked; save(); renderShortlist(); });
+
+  // ---------- render: log ----------
+  function renderLog() {
+    var ul = $("log");
+    ul.innerHTML = "";
+    $("logEmpty").hidden = state.drafted.length > 0;
+    $("undoLast").disabled = state.drafted.length === 0;
+    // newest first
+    for (var i = state.drafted.length - 1; i >= 0; i--) {
+      var p = byId[state.drafted[i]];
+      if (!p) continue;
+      var li = document.createElement("li");
+      li.innerHTML = '<span class="n">' + (i + 1) + '.</span><span class="who"></span><span class="pos"></span><button data-i="' + i + '">undo</button>';
+      li.querySelector(".who").textContent = p.name;
+      li.querySelector(".pos").textContent = p.pos + " · " + p.team;
+      ul.appendChild(li);
+    }
+  }
+  $("log").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-i]");
+    if (b) undoAt(Number(b.dataset.i));
+  });
+  $("undoLast").addEventListener("click", function () { undoAt(state.drafted.length - 1); });
+
+  // ---------- counts / all ----------
+  function renderCounts() {
+    $("cntLeft").textContent = PLAYERS.length - state.drafted.length;
+    $("cntDrafted").textContent = state.drafted.length;
+  }
+  function renderAll() {
+    rebuildSets();
+    renderHead();
+    renderBoard();
+    renderShortlist();
+    renderLog();
+    renderCounts();
+  }
+
+  // ---------- actions ----------
+  function toggleStar(id) {
+    var i = state.starred.indexOf(id);
+    if (i >= 0) state.starred.splice(i, 1); else state.starred.push(id);
+    save(); renderAll();
+  }
+  function draft(id) {
+    if (!byId[id] || draftedSet[id]) return;
+    state.drafted.push(id);
+    save(); renderAll();
+    toast("Drafted: " + byId[id].name, function () { undoAt(state.drafted.length - 1); });
+  }
+  function undoAt(i) {
+    if (i < 0 || i >= state.drafted.length) return;
+    var id = state.drafted.splice(i, 1)[0];
+    save(); renderAll();
+    toast("Undo: " + byId[id].name + " is back on the board");
+  }
+
+  var toastTimer;
+  function toast(msg, undoFn) {
+    var t = $("toast");
+    t.innerHTML = "";
+    t.appendChild(document.createTextNode(msg));
+    if (undoFn) { var b = document.createElement("button"); b.textContent = "undo"; b.addEventListener("click", function () { undoFn(); }); t.appendChild(b); }
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 3500);
+  }
+
+  // ---------- weights ----------
+  var wInputs = { y: $("wY"), a: $("wA"), h: $("wH") };
+  var wLabels = { y: $("wYv"), a: $("wAv"), h: $("wHv") };
+  function syncWeightsUI() {
+    ["y", "a", "h"].forEach(function (k) {
+      wInputs[k].value = state.w[k];
+      wLabels[k].textContent = state.w[k];
+    });
+    var s = state.w.y + state.w.a + state.w.h;
+    $("wSum").textContent = s > 0
+      ? "Y " + pct(state.w.y / s) + " · ADP " + pct(state.w.a / s) + " · HT " + pct(state.w.h / s)
+      : "all zero";
+  }
+  function pct(x) { return Math.round(x * 100) + "%"; }
+  ["y", "a", "h"].forEach(function (k) {
+    wInputs[k].addEventListener("input", function () {
+      state.w[k] = Number(this.value);
+      syncWeightsUI(); recompute(); save(); renderAll();
+    });
+  });
+  $("wEqual").addEventListener("click", function () {
+    state.w = { y: DEFAULT_W.y, a: DEFAULT_W.a, h: DEFAULT_W.h };
+    syncWeightsUI(); recompute(); save(); renderAll();
+  });
+
+  // ---------- position chips ----------
+  $("posChips").addEventListener("click", function (e) {
+    var b = e.target.closest(".chip");
+    if (!b) return;
+    var pos = b.dataset.pos;
+    if (posFilter[pos]) { delete posFilter[pos]; b.classList.remove("on"); }
+    else { posFilter[pos] = true; b.classList.add("on"); }
+    renderBoard();
+  });
+
+  // ---------- search / typeahead ----------
+  var search = $("search"), suggest = $("suggest");
+  var sug = [], sugIdx = 0;
+  function norm(s) { return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""); }
+  function matches(q) {
+    q = norm(q.trim());
+    if (!q) return [];
+    var toks = q.split(/\s+/);
+    var out = [];
+    PLAYERS.forEach(function (p) {
+      var n = norm(p.name);
+      var parts = n.split(/[\s-]+/);
+      var score = 0;
+      for (var i = 0; i < toks.length; i++) {
+        var t = toks[i];
+        if (n.indexOf(t) < 0) return; // every token must appear
+        if (n.indexOf(t) === 0) score += 3;
+        else if (parts.some(function (w) { return w.indexOf(t) === 0; })) score += 2;
+        else score += 1;
+      }
+      out.push({ p: p, score: score });
+    });
+    out.sort(function (a, b) {
+      var da = draftedSet[a.p.id] ? 1 : 0, db = draftedSet[b.p.id] ? 1 : 0;
+      if (da !== db) return da - db; // available players first
+      if (b.score !== a.score) return b.score - a.score;
+      return tiebreak(a.p, b.p);
+    });
+    return out.slice(0, 8).map(function (o) { return o.p; });
+  }
+  function renderSuggest() {
+    suggest.innerHTML = "";
+    if (!sug.length) { suggest.classList.remove("open"); return; }
+    sug.forEach(function (p, i) {
+      var d = document.createElement("div");
+      d.className = "s" + (i === sugIdx ? " active" : "");
+      d.dataset.id = p.id;
+      var c = comp[p.id];
+      d.innerHTML = '<span class="nm"></span><span class="meta"></span><span class="hint"></span>';
+      d.querySelector(".nm").textContent = p.name;
+      d.querySelector(".meta").textContent = p.pos + " · " + p.team + (c.score != null ? " · #" + c.rank : "");
+      if (draftedSet[p.id]) { d.classList.add("gone"); d.querySelector(".hint").textContent = "already drafted — undo in log"; }
+      else d.querySelector(".hint").textContent = i === sugIdx ? "Enter = jump · ⇧Enter = star" : "";
+      d.addEventListener("mousedown", function (e) { e.preventDefault(); if (!draftedSet[p.id]) { locate(p.id); clearSearch(); } });
+      suggest.appendChild(d);
+    });
+    suggest.classList.add("open");
+  }
+  function clearSearch() { search.value = ""; sug = []; sugIdx = 0; renderSuggest(); }
+
+  // Jump to a player on the board: clear a hiding position filter, centre the row, flash it, focus its ★.
+  var flashTimer;
+  function locate(id) {
+    var p = byId[id];
+    if (!p || draftedSet[id]) return;
+    if (Object.keys(posFilter).length && !matchesPosFilter(p)) clearPosFilter();
+    var row = boardBody.querySelector('tr[data-id="' + id + '"]');
+    if (!row) return;
+    row.scrollIntoView({ block: "center" });
+    var prev = boardBody.querySelector("tr.flash");
+    if (prev) prev.classList.remove("flash");
+    clearTimeout(flashTimer);
+    void row.offsetWidth; // restart the animation if the same row is hit twice
+    row.classList.add("flash");
+    flashTimer = setTimeout(function () { row.classList.remove("flash"); }, 1600);
+    var star = row.querySelector('button[data-act="star"]');
+    if (star) star.focus({ preventScroll: true });
+  }
+  search.addEventListener("input", function () { sug = matches(search.value); sugIdx = 0; renderSuggest(); });
+  search.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown") { e.preventDefault(); if (sug.length) { sugIdx = (sugIdx + 1) % sug.length; renderSuggest(); } }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (sug.length) { sugIdx = (sugIdx - 1 + sug.length) % sug.length; renderSuggest(); } }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      var p = sug[sugIdx];
+      if (!p) return;
+      if (draftedSet[p.id]) return; // note in the typeahead already says: undo in log
+      if (e.shiftKey) { if (!starredSet[p.id]) toggleStar(p.id); toast("Starred: " + p.name); }
+      else locate(p.id);
+      clearSearch();
+    }
+    else if (e.key === "Escape") { if (search.value) clearSearch(); else search.blur(); }
+  });
+  search.addEventListener("blur", function () { setTimeout(function () { suggest.classList.remove("open"); }, 120); });
+  search.addEventListener("focus", function () { if (sug.length) suggest.classList.add("open"); });
+
+  document.addEventListener("keydown", function (e) {
+    var tag = (e.target.tagName || "").toLowerCase();
+    var typing = tag === "input" || tag === "textarea";
+    if (e.key === "/" && !typing) { e.preventDefault(); search.focus(); search.select(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); undoAt(state.drafted.length - 1); }
+  });
+
+  // ---------- reset ----------
+  $("resetBtn").addEventListener("click", function () {
+    if (!confirm("Reset the draft? This clears drafted, starred and weights.")) return;
+    state.drafted = []; state.starred = []; state.w = { y: DEFAULT_W.y, a: DEFAULT_W.a, h: DEFAULT_W.h };
+    state.sort = { key: "comp", dir: 1 };
+    try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+    syncWeightsUI(); recompute(); renderAll();
+    toast("Reset.");
+  });
+
+  // ---------- boot ----------
+  var badge = $("srcBadge");
+  if (!PLAYERS.length) { badge.textContent = "NO DATA — check data/players.js"; badge.className = "mock"; }
+  else if (window.PLAYERS_SOURCE === "mock") { badge.textContent = "MOCK DATA (" + PLAYERS.length + ")"; badge.className = "mock"; }
+  else { badge.textContent = PLAYERS.length + " players"; }
+
+  load();
+  // Hide the 9-cat toggle entirely when the data has no category values.
+  var hasCats = PLAYERS.some(function (p) { return p.cats && Object.keys(p.cats).length; });
+  if (!hasCats) { state.showCats = false; document.body.classList.add("nocats"); }
+  $("showCats").checked = state.showCats;
+  syncWeightsUI();
+  recompute();
+  renderAll();
+
+  // expose for debugging / tests
+  window.__draft = { state: state, comp: comp, draft: draft, undoAt: undoAt, toggleStar: toggleStar, renderAll: renderAll };
+})();
+</script>
+</body>
+</html>

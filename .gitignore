@@ -1,0 +1,6 @@
+.playwright-mcp/
+# Scraped from paid sources (Yahoo Plus/Diamond, Hashtag Basketball) — kept local only
+data/yahoo_adp.json
+data/yahoo_expert.json
+data/hashtag.json
+data/players.js
