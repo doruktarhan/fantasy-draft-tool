@@ -185,6 +185,8 @@
   #tier td.band { color: var(--muted); }
   #refSel { font: inherit; font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg); }
   #tierFoot { margin-top: 6px; }
+  #ioRow { display: flex; gap: 8px; margin-top: 8px; }
+  #ioRow button { font-size: 13px; padding: 2px 9px; }
 </style>
 </head>
 <body>
@@ -248,6 +250,11 @@
       <div id="tierEmpty" class="hint">Enter prices as players sell. Bands of 10 by the reference rank appear here, and Est $ on the board is the median price of sold players within ±5 ranks.</div>
       <table id="tier" hidden><thead><tr><th>Rank</th><th>n</th><th>min</th><th>med</th><th>max</th></tr></thead><tbody id="tierBody"></tbody></table>
       <div id="tierFoot" class="hint" hidden></div>
+      <div class="row" id="ioRow">
+        <button id="exportBtn" title="Download all prices as JSON ({playerId: price})">Export prices</button>
+        <button id="importBtn" title="Load prices from a JSON file ({playerId: price}); adds and updates, never removes">Import…</button>
+        <input type="file" id="importFile" accept=".json,application/json" hidden>
+      </div>
     </section>
 
     <section id="shortlistSec">
@@ -321,8 +328,35 @@
       if (s.ref === "yahoo" || s.ref === "comp" || s.ref === "ht") state.ref = s.ref;
     } catch (e) { /* ignore */ }
   }
+  // Sold-list guard: only undo and Reset may shrink the sold list. Any other save that would drop sales
+  // gets them merged back from the persisted copy first, so a stale in-memory state can never wipe prices.
+  var BACKUP_KEY = "fdt:salary:backup:v1";
+  var allowShrink = false;
+  function readSaved(key) {
+    try { var raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  }
+  function guardSold() {
+    if (!isSalary() || allowShrink) return;
+    var prev = readSaved(KEYS.salary);
+    if (!prev || !Array.isArray(prev.sold) || prev.sold.length <= state.sold.length) return;
+    var have = {};
+    state.sold.forEach(function (e) { have[e.id] = true; });
+    var restored = 0;
+    prev.sold.forEach(function (e) {
+      if (e && byId[e.id] && !have[e.id] && isFinite(Number(e.price))) { state.sold.push({ id: e.id, price: Number(e.price) }); restored++; }
+    });
+    if (restored) toast("Kept " + restored + " sale" + (restored === 1 ? "" : "s") + " that would have been lost");
+  }
   function save() {
-    try { localStorage.setItem(KEYS[mode], JSON.stringify(state)); } catch (e) { /* ignore */ }
+    try {
+      guardSold();
+      localStorage.setItem(KEYS[mode], JSON.stringify(state));
+      // Rolling backup of the sold list: only ever grows, survives Reset, restorable via Import.
+      if (isSalary() && state.sold.length) {
+        var b = readSaved(BACKUP_KEY);
+        if (!b || !Array.isArray(b.sold) || b.sold.length <= state.sold.length) localStorage.setItem(BACKUP_KEY, JSON.stringify({ sold: state.sold, at: Date.now() }));
+      }
+    } catch (e) { /* ignore */ }
   }
   function num(v, d) { v = Number(v); return isFinite(v) ? v : d; }
   function isSalary() { return mode === "salary"; }
@@ -583,10 +617,19 @@
       td.appendChild(b);
     }
   }
+  // Commit whatever is typed in an open price input (or close it if empty). Called before anything
+  // rebuilds the board, so a typed price can never be lost to a re-render or to opening another row.
+  function flushPriceEditor() {
+    if (!editing) return;
+    var inp = boardBody.querySelector('tr[data-id="' + editing.id + '"] td.price input');
+    if (!inp) return; // not in the DOM yet (editor being opened on a hidden row)
+    closePriceEditor(inp.value.trim() !== "");
+  }
   // Open the price input on a row. Switches the view to All if the row is hidden by the current view.
   function openPriceEditor(id) {
     var p = byId[id];
     if (!p || !isSalary()) return;
+    if (editing && editing.id !== id) flushPriceEditor();
     editing = { id: id };
     var row = boardBody.querySelector('tr[data-id="' + id + '"]');
     if (!row) {
@@ -613,6 +656,13 @@
     if (commit && inp && inp.value.trim() !== "" && isFinite(v) && v >= 0) { sell(id, v); search.focus(); return; }
     if (td) fillPriceCell(td, p);
   }
+  // While a price input is open, keep focus in it when the mouse goes to another Sold/price button or a
+  // column header: the click then commits the typed price itself (via flushPriceEditor) instead of a blur
+  // rebuilding the board under the cursor and swallowing the click.
+  document.addEventListener("mousedown", function (e) {
+    if (!editing || !e.target.closest) return;
+    if (e.target.closest('button[data-act="sell"], button[data-act="editPrice"], #boardHead th, #viewSeg button')) e.preventDefault();
+  });
   boardBody.addEventListener("keydown", function (e) {
     if (!e.target.classList || !e.target.classList.contains("priceIn")) return;
     if (e.key === "Enter") { e.preventDefault(); closePriceEditor(true); }
@@ -626,6 +676,7 @@
   });
 
   function renderBoard() {
+    flushPriceEditor(); // a typed price must become a sale before the rows are rebuilt
     var ps = sorted(available());
     var frag = document.createDocumentFragment();
     var salary = isSalary();
@@ -924,7 +975,9 @@
     if (i < 0 || i >= entries.length) return;
     if (isSalary()) {
       var e = state.sold.splice(i, 1)[0];
-      save(); renderAll();
+      allowShrink = true;
+      try { save(); } finally { allowShrink = false; }
+      renderAll();
       toast("Undo: " + byId[e.id].name + " — " + fmtMoney(e.price) + " removed");
     } else {
       var id = state.drafted.splice(i, 1)[0];
@@ -947,7 +1000,7 @@
   function setMode(m) {
     if (m !== "snake" && m !== "salary") return;
     if (m === mode) return;
-    closePriceEditor(false);
+    flushPriceEditor();
     save();
     mode = m; saveMode();
     load();
@@ -960,8 +1013,51 @@
   $("viewSeg").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-view]");
     if (!b) return;
-    closePriceEditor(false);
+    flushPriceEditor();
     state.view = b.dataset.view; save(); syncViewUI(); renderBoard();
+  });
+
+  // ---------- export / import prices (salary safety net) ----------
+  function exportPrices() {
+    flushPriceEditor();
+    var out = {};
+    state.sold.forEach(function (e) { out[e.id] = e.price; });
+    var blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "salary-prices-" + new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-") + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    toast("Exported " + state.sold.length + " price" + (state.sold.length === 1 ? "" : "s"));
+  }
+  // Accepts { playerId: price } (the export and data/salary-recovered.json), a full state object with
+  // `sold`, or the backup blob. Existing prices are updated, new ones appended in the file's order.
+  function importPrices(text) {
+    var data;
+    try { data = JSON.parse(text); } catch (e) { toast("Import failed: not valid JSON"); return; }
+    var pairs = [];
+    if (data && Array.isArray(data.sold)) data.sold.forEach(function (e) { if (e) pairs.push([e.id, e.price]); });
+    else if (data && typeof data === "object") Object.keys(data).forEach(function (id) { pairs.push([id, data[id]]); });
+    var added = 0, updated = 0, skipped = 0;
+    pairs.forEach(function (pr) {
+      var id = pr[0], price = Number(pr[1]);
+      if (!byId[id] || !isFinite(price) || price < 0) { skipped++; return; }
+      var existing = null;
+      state.sold.forEach(function (e) { if (e.id === id) existing = e; });
+      if (existing) { if (existing.price !== price) { existing.price = price; updated++; } }
+      else { state.sold.push({ id: id, price: price }); added++; }
+    });
+    save(); renderAll();
+    toast("Imported: " + added + " added, " + updated + " updated" + (skipped ? ", " + skipped + " skipped (unknown id or bad price)" : ""));
+  }
+  $("exportBtn").addEventListener("click", exportPrices);
+  $("importBtn").addEventListener("click", function () { $("importFile").value = ""; $("importFile").click(); });
+  $("importFile").addEventListener("change", function () {
+    var f = this.files && this.files[0];
+    if (!f) return;
+    var r = new FileReader();
+    r.onload = function () { importPrices(String(r.result)); };
+    r.readAsText(f);
   });
 
   var toastTimer;
